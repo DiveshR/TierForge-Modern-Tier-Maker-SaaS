@@ -113,6 +113,58 @@ TierForge follows **Clean Architecture** and **SOLID** principles to ensure the 
    npm run dev
    ```
 
+---
+
+## 📊 Step 2: Database Architecture
+
+### Entity Relationship Diagram (ERD)
+
+```mermaid
+erDiagram
+    USERS ||--o{ TIER_LISTS : creates
+    USERS ||--o{ COMMENTS : writes
+    USERS ||--o{ LIKES : gives
+    TIER_LISTS ||--o{ TIER_ROWS : contains
+    TIER_LISTS ||--o{ TIER_ITEM_POSITIONS : has
+    TIER_ROWS ||--o{ TIER_ITEM_POSITIONS : holds
+    TIER_ITEMS ||--o{ TIER_ITEM_POSITIONS : ranked_as
+    TIER_LISTS ||--o{ COMMENTS : has
+    TIER_LISTS ||--o{ LIKES : has
+    TIER_LISTS }|..|{ TAGS : categorized_by
+    TIER_ITEMS ||--o{ MEDIA : has_assets
+    ACTIVITY_LOGS }|--|| USERS : performed_by
+```
+
+### PostgreSQL Optimization Strategy
+
+#### 1. UUID Primary Keys
+Every table uses `UUID v7` (via Laravel's `HasUuids`) to ensure:
+- **Scalability**: No single-point-of-failure for ID generation.
+- **Security**: Prevents ID enumeration attacks on public resources.
+- **Distributed Ready**: Seamless merging of data across different databases/shards.
+
+#### 2. Specialized Indexing
+- **Composite Indexes**: Used on `tier_item_positions` (`tier_list_id`, `tier_row_id`, `position`) to optimize the retrieval of ranked items.
+- **Unique Constraints**: `likes` table uses a unique composite key `(user_id, likeable_id, likeable_type)` to ensure data integrity at the database level.
+- **JSONB Indexing**: GIN indexes will be added as metadata schemas solidify for high-speed attribute filtering.
+
+#### 3. Soft Deletes & Audit Trails
+- **Soft Deletes**: Implemented on `users`, `tier_lists`, and `comments` for historical integrity.
+- **Activity Logs**: Dedicated table with JSONB properties to track changes for moderation and security auditing.
+
+#### 4. Partitioning Strategy (Future)
+For high-scale growth, we have designed the schema to support:
+- **Range Partitioning**: On `activity_logs` by `created_at` (e.g., monthly partitions).
+- **Hash Partitioning**: On `likes` and `comments` by `tier_list_id` to distribute social data across shards.
+
+### Database Integrity Tests
+Run the following to verify the schema and relationships:
+```bash
+docker-compose exec app php artisan test tests/Feature/Database/SchemaTest.php
+```
+
+---
+
 ### Command Reference
 
 | Command | Purpose |
