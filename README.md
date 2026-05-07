@@ -143,5 +143,5 @@ TierForge follows **Clean Architecture** and **SOLID** principles to ensure the 
 ---
 
 <p align="center">
-Built with ❤️ by the TierForge Team.
+Built with ❤️ by me Divesh.
 </p>
