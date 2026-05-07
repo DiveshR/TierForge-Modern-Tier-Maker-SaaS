@@ -120,6 +120,8 @@ TierForge follows **Clean Architecture** and **SOLID** principles to ensure the 
 | `php artisan horizon` | Monitor background queues. |
 | `php artisan reverb:start` | Start the WebSocket server. |
 | `php artisan scout:import` | Sync data to Meilisearch. |
+| `php artisan make:filament-user` | Create a new administrative user. |
+| `php artisan reverb:start --debug` | Start the WebSocket server with debugging. |
 | `composer test` | Run Pest PHP tests. |
 | `composer pint` | Fix code style issues. |
 | `composer analyze` | Run Larastan static analysis. |
