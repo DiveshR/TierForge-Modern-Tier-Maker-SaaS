@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
@@ -10,9 +12,30 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
-class TierList extends Model
+/**
+ * TierList Eloquent Model.
+ *
+ * RESPONSIBILITY: Relationships and casts ONLY.
+ * All creation / mutation / query logic lives in TierListRepository.
+ *
+ * @property string      $id
+ * @property string      $user_id
+ * @property string      $title
+ * @property string      $slug
+ * @property string|null $description
+ * @property string|null $category
+ * @property bool        $is_public
+ * @property array|null  $metadata
+ * @property string|null $deleted_at
+ * @property string      $created_at
+ * @property string      $updated_at
+ */
+final class TierList extends Model
 {
     use HasFactory, HasUuids, SoftDeletes;
+
+    public bool $incrementing = false;
+    protected string $keyType = 'string';
 
     protected $fillable = [
         'user_id',
@@ -24,10 +47,15 @@ class TierList extends Model
         'metadata',
     ];
 
-    protected $casts = [
-        'is_public' => 'boolean',
-        'metadata' => 'json',
-    ];
+    protected function casts(): array
+    {
+        return [
+            'is_public' => 'boolean',
+            'metadata'  => 'array',
+        ];
+    }
+
+    // ─── Relationships ────────────────────────────────────────────────────────
 
     public function user(): BelongsTo
     {
@@ -56,6 +84,7 @@ class TierList extends Model
 
     public function likes(): HasMany
     {
-        return $this->hasMany(Like::class, 'likeable_id')->where('likeable_type', self::class);
+        return $this->hasMany(Like::class, 'likeable_id')
+            ->where('likeable_type', self::class);
     }
 }

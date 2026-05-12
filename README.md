@@ -165,6 +165,248 @@ docker-compose exec app php artisan test tests/Feature/Database/SchemaTest.php
 
 ---
 
+## 🏛️ Step 3: Clean Architecture Implementation — SOLID in Practice
+
+
+> **What we built:** A fully layered backend with strict separation of concerns.
+> Every class knows its role. No class does another class's job.
+
+---
+
+### 🍽️ The Restaurant Kitchen Analogy (Recap)
+
+| Kitchen Role | Laravel Layer | File(s) Created |
+| :--- | :--- | :--- |
+| 🧑‍🍳 **Chef** | `Service` | `TierListService`, `TierItemService`, `UserProfileService` |
+| 📋 **Order Manager** | `Controller` | _(Step 4 — HTTP layer)_ |
+| 📖 **Recipe Book** | `Repository` | `TierListRepository`, `TierItemRepository`, `UserRepository` |
+| 📦 **Ingredients Box** | `DTO` | `TierListData`, `TierItemData`, `TierRowData`, `UserProfileData` |
+| 🤝 **Kitchen Contract** | `Contract` | `TierListRepositoryContract`, `TierListServiceContract`, etc. |
+| ⚡ **Single Task Cook** | `Action` | `CreateTierListAction`, `PublishTierListAction`, `CloneTierListAction`, etc. |
+| 🏷️ **Typed Measure** | `ValueObject` | `ColorHex`, `Slug` |
+
+---
+
+### 📁 Files Created in This Step
+
+```
+app/
+├── ValueObjects/
+│   ├── ColorHex.php               ← Validated, immutable hex colour (#FF2D20)
+│   └── Slug.php                   ← URL-safe, normalised slug value
+│
+├── DTOs/
+│   ├── TierListData.php           ← Typed parcel for TierList create/update
+│   ├── TierRowData.php            ← Carries ColorHex ValueObject for row colour
+│   ├── TierItemData.php           ← Item catalogue entry data
+│   └── UserProfileData.php        ← Profile fields only (no auth/password)
+│
+├── Contracts/
+│   ├── Repositories/
+│   │   ├── TierListRepositoryContract.php   ← 9 methods, fully documented
+│   │   ├── TierItemRepositoryContract.php   ← Item + position management
+│   │   └── UserRepositoryContract.php       ← Profile operations only
+│   └── Services/
+│       └── TierListServiceContract.php      ← Controllers depend on this
+│
+├── Repositories/
+│   ├── TierListRepository.php     ← All TierList SQL in one place
+│   ├── TierItemRepository.php     ← Atomic syncPositions() via transaction
+│   └── UserRepository.php        ← Profile updates, pagination
+│
+├── Services/
+│   ├── TierListService.php        ← Orchestrates 4 Actions + Repository
+│   ├── TierItemService.php        ← Delegates reorder to ReorderAction
+│   └── UserProfileService.php    ← Profile orchestration
+│
+├── Actions/
+│   ├── TierList/
+│   │   ├── CreateTierListAction.php   ← Persist one TierList
+│   │   ├── UpdateTierListAction.php   ← Apply attribute changes
+│   │   ├── PublishTierListAction.php  ← Set is_public + dispatch event
+│   │   └── CloneTierListAction.php    ← Deep-clone in DB transaction
+│   ├── TierItem/
+│   │   └── ReorderTierItemsAction.php ← Atomic position sync
+│   └── User/
+│       └── UpdateUserProfileAction.php ← Profile fields update
+│
+├── Events/
+│   └── TierListPublished.php      ← Domain event → async queue jobs
+│
+├── Models/  (all finalised — strict typed, final, casts() method)
+│   ├── User.php         ← + avatar_path, bio fillable; + tierLists() relation
+│   ├── TierList.php     ← casts() method; all relations complete
+│   ├── TierRow.php      ← order_index cast to int; positions sorted
+│   ├── TierItem.php     ← Shared catalogue design documented
+│   ├── TierItemPosition.php ← position cast to int
+│   ├── Comment.php      ← Self-referential nesting documented
+│   ├── Like.php         ← Polymorphic uniqueness documented
+│   ├── Media.php        ← size cast to int
+│   ├── ActivityLog.php  ← Append-only, JSONB audit replay
+│   └── Tag.php          ← Shared taxonomy via pivot
+│
+└── Providers/
+    └── AppServiceProvider.php  ← All Contract→Concrete bindings registered
+```
+
+---
+
+### 🔄 Request Lifecycle — Full Stack Trace
+
+```
+POST /api/tier-lists
+│
+├─ 1. Route          → routes/api.php routes to TierListController@store
+│
+├─ 2. FormRequest    → StoreTierListRequest validates all fields
+│                      (rules, authorisation, custom messages)
+│
+├─ 3. Controller     → Builds TierListData::fromRequest($validated, $userId)
+│   (thin)              Calls $this->tierListService->create($dto)
+│
+├─ 4. Service        → TierListService::create(TierListData $data)
+│   (orchestrator)      Delegates to → CreateTierListAction::handle($data)
+│
+├─ 5. Action         → CreateTierListAction::handle(TierListData $data)
+│   (single task)       Calls $this->repository->create($data)
+│
+├─ 6. Repository     → TierListRepository::create(TierListData $data)
+│   (query layer)       Calls TierList::create($data->toArray())
+│
+├─ 7. Model          → Eloquent persists to PostgreSQL
+│   (passive)           Returns hydrated TierList instance
+│
+├─ 8. (On publish)   → TierListPublished::dispatch($tierList)
+│   Event               Queued listener: IndexTierListInSearch
+│
+└─ 9. Controller     → Returns TierListResource::make($tierList) → 201
+```
+
+**The Iron Rule:** Each layer speaks only to the layer directly below it.
+The Controller never queries the DB. The Repository never knows about HTTP.
+
+---
+
+### 🗄️ Repository Pattern — Deep Analysis
+
+#### Why Use a Repository?
+
+| Without Repository | With Repository |
+| :--- | :--- |
+| SQL scattered across Controllers, Services, Blade | All queries in one class per model |
+| N+1 queries silently introduced anywhere | Eager-loading defined once, shared everywhere |
+| Mocking DB in tests requires framework tricks | Swap to `InMemoryRepository` — zero test DB |
+| Changing ORM = touching every class that queries | Change only the repository class |
+| No place to add query logging, caching, metrics | Single interception point for all queries |
+
+#### Complexity Analysis
+
+| Operation | Repository Approach | Naive Approach |
+| :--- | :--- | :--- |
+| **Create** | `TierList::create($data->toArray())` | Same, but scattered |
+| **Reorder (N items)** | Delete + bulk insert = **2 queries** | N × `UPDATE` = **N queries** |
+| **Full structure load** | 1 `with()` call = **6 eager-loaded tables** | N+1 per relation |
+| **Test isolation** | Inject `FakeRepository` | Requires test DB always |
+
+#### Tradeoffs
+
+**Costs:**
+- Extra files per domain entity (contract + implementation = 2 files minimum).
+- New developers must learn the layer structure before adding simple features.
+- Not worth it for a 2-table CRUD app — this is intentional SaaS overhead.
+
+**Benefits at scale:**
+- Adding caching to `findBySlug` → change 1 file, zero risk to other features.
+- Adding a read replica → create `ReadOnlyTierListRepository`, swap binding.
+- Performance regression → profile only repository classes, not the whole stack.
+- Multi-tenancy → add tenant scope inside repositories, Services stay unchanged.
+
+---
+
+### ⚙️ Service Container Bindings
+
+```php
+// AppServiceProvider::register()
+$this->app->bind(TierListRepositoryContract::class, TierListRepository::class);
+$this->app->bind(TierItemRepositoryContract::class, TierItemRepository::class);
+$this->app->bind(UserRepositoryContract::class,     UserRepository::class);
+$this->app->bind(TierListServiceContract::class,    TierListService::class);
+```
+
+**How Laravel resolves this:**
+
+```
+Controller::__construct(TierListServiceContract $service)
+    Container sees binding → resolves TierListService
+    TierListService::__construct(CreateTierListAction, ..., TierListRepositoryContract)
+        Container sees binding → resolves TierListRepository
+        TierListRepository::__construct()  ← no further deps, instantiated directly
+```
+
+**Swapping for tests (zero code change in Service):**
+```php
+// In a test setUp():
+$this->app->instance(
+    TierListRepositoryContract::class,
+    new InMemoryTierListRepository()
+);
+```
+
+---
+
+### 🔁 Service Layer Flow — Orchestration In Detail
+
+```
+TierListService::create($dto)
+    └── CreateTierListAction::handle($dto)
+            └── TierListRepository::create($dto)
+                    └── TierList::create($dto->toArray())  [Eloquent]
+
+TierListService::publish($tierList)
+    └── PublishTierListAction::handle($tierList)
+            ├── TierListRepository::update($tierList, ['is_public' => true])
+            └── TierListPublished::dispatch($tierList)
+                    └── [Queue] IndexTierListInSearch::handle($event)
+
+TierListService::clone($source, $newOwnerId)
+    └── CloneTierListAction::handle($source, $newOwnerId)
+            └── DB::transaction()
+                    ├── TierListRepository::create(TierListData::fromArray([...]))
+                    ├── $clone->rows()->create([...])  [per row]
+                    ├── $clone->itemPositions()->create([...])  [per position]
+                    └── $clone->tags()->sync([...])
+```
+
+---
+
+### 🧪 Defined Test Coverage
+
+| Test Class | Layer | DB? | What It Proves |
+| :--- | :--- | :--- | :--- |
+| `TierListDataTest` | Unit/DTO | ❌ | `fromArray()` maps correctly; nullable fields safe |
+| `ColorHexTest` | Unit/VO | ❌ | Validates #RRGGBB; rejects malformed; immutable |
+| `SlugTest` | Unit/VO | ❌ | Normalises input; rejects blank; `__toString()` works |
+| `TierListRepositoryTest` | Integration | ✅ | CRUD + eager load + pagination correct SQL |
+| `TierItemRepositoryTest` | Integration | ✅ | `syncPositions()` atomically replaces all positions |
+| `CreateTierListActionTest` | Integration | ✅ | Action persists correctly via real repository |
+| `PublishTierListActionTest` | Integration | ✅ | `is_public` flipped; `TierListPublished` event fired |
+| `CloneTierListActionTest` | Integration | ✅ | Clone has new UUID; rows + positions copied; tags synced |
+| `TierListServiceTest` | Integration | ✅ (mock repo) | Service calls right Action; returns correct model |
+| `StoreTierListTest` | Feature | ✅ | POST → 201; correct JSON shape via TierListResource |
+| `PublishTierListTest` | Feature | ✅ | PUT → 200; event dispatched; `is_public = true` |
+
+```bash
+# Run tests by layer
+php artisan test tests/Unit/
+php artisan test tests/Integration/
+php artisan test tests/Feature/
+
+# Run with coverage
+php artisan test --coverage --min=80
+```
+
+---
+
 ### Command Reference
 
 | Command | Purpose |
